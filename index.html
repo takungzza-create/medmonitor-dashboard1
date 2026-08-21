@@ -156,15 +156,15 @@
       </div>
       <div class="log">
         MQTT Broker:<br>
-        wss://e421f0d612a2494f8d8a56556689e6c3.s1.eu.hivemq.cloud:8884/mqtt
+        e421f0d612a2494f8d8a56556689e6c3.s1.eu.hivemq.cloud
       </div>
     </div>
   </section>
 </main>
 
 <script>
-  // HiveMQ Cloud WebSocket TLS
-  const MQTT_HOST = "wss://e421f0d612a2494f8d8a56556689e6c3.s1.eu.hivemq.cloud:8884/mqtt";
+  // HiveMQ Cloud WebSocket Connection Config
+  const MQTT_URL = "wss://e421f0d612a2494f8d8a56556689e6c3.s1.eu.hivemq.cloud:8884/mqtt";
   const MQTT_USERNAME = "ECG";
   const MQTT_PASSWORD = "11223344";
 
@@ -238,7 +238,8 @@
 
   const clientId = "dashboard_" + Math.random().toString(16).slice(2);
 
-  const client = mqtt.connect(MQTT_HOST, {
+  // เชื่อมต่อโดยใช้ URL เต็มรูปแบบ
+  const client = mqtt.connect(MQTT_URL, {
     clientId,
     username: MQTT_USERNAME,
     password: MQTT_PASSWORD,
@@ -276,8 +277,6 @@
     const value = message.toString();
 
     if (topic === TOPICS.waveform) {
-      // Supports one number per MQTT message.
-      // Also supports comma-separated values.
       value.split(",").forEach(v => addECG(v));
       return;
     }
