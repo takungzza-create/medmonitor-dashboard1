@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ECG Patient Monitor</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f4f7fb;
+      color: #172033;
+    }
+    header {
+      background: #fff;
+      padding: 22px 5%;
+      border-bottom: 1px solid #e5e9f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+    }
+    h1 { margin: 0; font-size: 25px; }
+    .sub { color: #697386; margin-top: 5px; font-size: 14px; }
+    .connection {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-weight: bold;
+      font-size: 14px;
+    }
+    .dot {
+      width: 11px; height: 11px; border-radius: 50%;
+      background: #d64545;
+    }
+    .dot.online { background: #25a35a; }
+    main { width: 90%; max-width: 1400px; margin: 25px auto; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+    .card, .chart-card {
+      background: #fff;
+      border: 1px solid #e5e9f0;
+      border-radius: 14px;
+      padding: 20px;
+      box-shadow: 0 3px 14px rgba(30,45,70,.05);
+    }
+    .label { color: #697386; font-size: 14px; }
+    .value {
+      font-size: 35px;
+      font-weight: 700;
+      margin-top: 9px;
+    }
+    .unit { font-size: 16px; font-weight: normal; color: #697386; }
+    .grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 18px;
+    }
+    .chart-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 15px;
+    }
+    .chart-wrap { height: 410px; }
+    .status-box {
+      margin-top: 18px;
+      padding: 14px;
+      border-radius: 10px;
+      background: #f5f7fa;
+    }
+    .status-good { color: #21874a; font-weight: bold; }
+    .status-bad { color: #c43c3c; font-weight: bold; }
+    .info {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .info div {
+      background: #f7f8fa;
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .info strong { display: block; margin-top: 5px; font-size: 18px; }
+    .log {
+      margin-top: 18px;
+      color: #697386;
+      font-size: 13px;
+    }
+    @media (max-width: 900px) {
+      .cards { grid-template-columns: 1fr 1fr; }
+      .grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 520px) {
+      .cards { grid-template-columns: 1fr; }
+      header { align-items: flex-start; flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>❤️ ECG Patient Monitor</h1>
+    <div class="sub">ESP32 + AD8232 · Real-time MQTT Dashboard</div>
+  </div>
+  <div class="connection">
+    <span id="connectionDot" class="dot"></span>
+    <span id="connectionText">Disconnected</span>
+  </div>
+</header>
+
+<main>
+  <section class="cards">
+    <div class="card">
+      <div class="label">Heart Rate</div>
+      <div class="value"><span id="bpm">--</span> <span class="unit">BPM</span></div>
+    </div>
+    <div class="card">
+      <div class="label">RR Interval</div>
+      <div class="value"><span id="rr">--</span> <span class="unit">ms</span></div>
+    </div>
+    <div class="card">
+      <div class="label">SDNN</div>
+      <div class="value"><span id="sdnn">--</span> <span class="unit">ms</span></div>
+    </div>
+    <div class="card">
+      <div class="label">RMSSD</div>
+      <div class="value"><span id="rmssd">--</span> <span class="unit">ms</span></div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="chart-card">
+      <div class="chart-title">📈 Live ECG Waveform</div>
+      <div class="chart-wrap">
+        <canvas id="ecgChart"></canvas>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-title">System Status</div>
+      <div class="info">
+        <div>Lead Status<strong id="leadStatus">--</strong></div>
+        <div>MQTT<strong id="mqttStatus">Disconnected</strong></div>
+      </div>
+      <div class="status-box">
+        <div class="label">Latest ECG status</div>
+        <div id="ecgStatus" style="margin-top:7px;font-weight:bold;">Waiting for data...</div>
+      </div>
+      <div class="log">
+        MQTT Broker:<br>
+        e42f10d612a2494f8d8a565566689e6c3.s1.eu.hivemq.cloud:8884
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+  // HiveMQ Cloud WebSocket TLS
+  const MQTT_HOST = "e42f10d612a2494f8d8a565566689e6c3.s1.eu.hivemq.cloud";
+  const MQTT_PORT = 8884;
+
+  // IMPORTANT:
+  // Do not put a real HiveMQ password in a public website.
+  // Enter the credentials below only for local/private testing.
+  const MQTT_USERNAME = "ECG";
+  const MQTT_PASSWORD = "11223344";
+
+  // Topics expected from ESP32
+  const TOPICS = {
+    bpm: "ecg/bpm",
+    rr: "ecg/rr",
+    sdnn: "ecg/sdnn",
+    rmssd: "ecg/rmssd",
+    waveform: "ecg/waveform",
+    status: "ecg/status"
+  };
+
+  const MAX_POINTS = 500;
+  const ecgData = [];
+  const labels = [];
+
+  const chart = new Chart(document.getElementById("ecgChart"), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        label: "ECG",
+        data: ecgData,
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.05
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      scales: {
+        x: { display: false },
+        y: { title: { display: true, text: "Signal" } }
+      },
+      plugins: { legend: { display: false } }
+    }
+  });
+
+  function setConnection(online) {
+    document.getElementById("connectionDot").classList.toggle("online", online);
+    document.getElementById("connectionText").textContent =
+      online ? "Connected" : "Disconnected";
+    document.getElementById("mqttStatus").textContent =
+      online ? "Connected" : "Disconnected";
+  }
+
+  function numberValue(topic, value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return;
+    if (topic === TOPICS.bpm) document.getElementById("bpm").textContent = Math.round(n);
+    if (topic === TOPICS.rr) document.getElementById("rr").textContent = Math.round(n);
+    if (topic === TOPICS.sdnn) document.getElementById("sdnn").textContent = n.toFixed(1);
+    if (topic === TOPICS.rmssd) document.getElementById("rmssd").textContent = n.toFixed(1);
+  }
+
+  function addECG(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return;
+
+    ecgData.push(n);
+    labels.push("");
+    if (ecgData.length > MAX_POINTS) {
+      ecgData.shift();
+      labels.shift();
+    }
+    chart.update("none");
+  }
+
+  const clientId = "dashboard_" + Math.random().toString(16).slice(2);
+
+  const client = mqtt.connect(`wss://${MQTT_HOST}:${MQTT_PORT}/mqtt`, {
+    clientId,
+    username: MQTT_USERNAME,
+    password: MQTT_PASSWORD,
+    clean: true,
+    reconnectPeriod: 3000,
+    connectTimeout: 10000,
+    keepalive: 30
+  });
+
+  client.on("connect", () => {
+    setConnection(true);
+
+    Object.values(TOPICS).forEach(topic => {
+      client.subscribe(topic, { qos: 0 });
+    });
+
+    document.getElementById("ecgStatus").textContent = "Receiving data...";
+  });
+
+  client.on("reconnect", () => {
+    setConnection(false);
+    document.getElementById("connectionText").textContent = "Reconnecting...";
+  });
+
+  client.on("close", () => setConnection(false));
+
+  client.on("error", (err) => {
+    console.error("MQTT error:", err);
+    setConnection(false);
+    document.getElementById("ecgStatus").textContent =
+      "MQTT connection error";
+  });
+
+  client.on("message", (topic, message) => {
+    const value = message.toString();
+
+    if (topic === TOPICS.waveform) {
+      // Supports one number per MQTT message.
+      // Also supports comma-separated values.
+      value.split(",").forEach(v => addECG(v));
+      return;
+    }
+
+    if (topic === TOPICS.status) {
+      document.getElementById("ecgStatus").textContent = value;
+      const good = value === "VALID" || value === "TRACKING" ||
+                   value === "CONNECTED" || value === "OK";
+      document.getElementById("leadStatus").textContent =
+        value === "LEAD_OFF" ? "LEAD OFF" : "OK";
+      document.getElementById("leadStatus").className =
+        good ? "status-good" : "status-bad";
+      return;
+    }
+
+    numberValue(topic, value);
+  });
+</script>
+</body>
+</html>
